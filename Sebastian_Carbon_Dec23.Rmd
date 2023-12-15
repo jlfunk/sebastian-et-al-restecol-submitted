@@ -1,0 +1,1402 @@
+---
+title: "Sebastian_Carbon_Dec23.Rmd"
+author: "Laurel Sebastian"
+date: "2023-08-06"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+## Packages
+getwd() 
+```{r}
+library(readr)
+library(performance)
+library("tidyverse")
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(ggplot2)
+library(ggfortify)
+library(r2symbols)
+library(car)
+library(multcompView)
+library(devtools)
+library("MuMIn")
+library("mgcv")
+library(MASS)
+library(cowplot)
+library(vegan)
+library("writexl")
+library(corrplot)
+library(viridis)
+library("merDeriv")
+library(FD)
+library(arm)
+library(dotwhisker)
+library("FactoMineR")
+library("factoextra")
+library(ggsignif)
+library(dplyr)
+
+```
+
+## Carbon Dataframes
+```{r}
+
+Carbon <- read.csv("data/HappyForbCarbon.csv") 
+Carbon$TC_Log <-log(Carbon$TC_mg_gsoil)
+
+#BlockAge refers to the two-factor land use history treatment = 
+#"1"=2 yrs shrub occupation (precipitation shelters J-O), "0"= 6 yrs shrub occupation (shelters A-I)
+CarbonAll <- Carbon %>% 
+  mutate(BlockAge=NA) 
+CarbonAll <- CarbonAll %>%
+  mutate(BlockAge=ifelse(Block=="J", "2 yrs shrubs", 
+                         ifelse(Block=="K", "2 yrs shrubs", 
+                                ifelse(Block=="L", "2 yrs shrubs", 
+                                       ifelse(Block=="M", "2 yrs shrubs", 
+                                              ifelse(Block=="N", "2 yrs shrubs", 
+                                                     ifelse(Block=="O", "2 yrs shrubs","6 yrs shrubs")))))))
+
+CarbonAll <- CarbonAll %>% 
+  mutate(Precip=ifelse(Precip=="wet", "125%", "50%"))
+CarbonAll$Year <- as.factor(CarbonAll$Year)
+
+#removing all NA rows at the bottom of dataframe
+CarbonAll <- CarbonAll[rowSums(is.na(CarbonAll)) !=ncol(CarbonAll), ]
+#removing 8 monoculture Festuca perennis plots 
+CarbonAll <- filter(CarbonAll, Carbon$Restoration!="MONO")
+```
+
+##Traits Dataframes
+```{r}
+
+#A is for "Averaged" cover data of each species for each plot # A code can be ignored for this manuscript. 
+#P is for "Prior year" cover data of each species for each plot from the year prior to the current year carbon reading. 
+#C is for "Current year" cover data of each species for each plot from the same year at that year's carbon reading.
+
+traits_A <- read.csv("data/traits_matched_A.csv")
+traits_A <- traits_A[,c(2:12)] #removing first column 
+rownames(traits_A) <- traits_A[,1]
+traits_A[,1] <- NULL
+
+#Species abundance data are percent cover of each species in each plot.
+#Remove all columns not used to calculate community weighted means (CWMs) 
+Abundances_A <- CarbonAll[,c(154, 122:149, 151:152)]
+
+#Remove plots (rows) with zero cover (of the focal species); can't calculate CWM with no cover data
+Abundances_A <- subset(Abundances_A, COVER_NoBRODIA_A>0) 
+
+#Remove plots (rows) with zero native cover
+CarbonAll_hasCOVER <- filter(CarbonAll, CarbonAll$COVER_NoBRODIA_A!="0") #47-IR has zero cover, so removed to make df sized match. 
+
+#then remove Total percent COVER so it isn't treated like a species 
+Abundances_A <- Abundances_A[,-1]
+
+#Checking subsets of columns/rows to match.
+identical(row.names(traits_A[1:30,]), colnames(Abundances_A[,1:30])) 
+
+#calculate functional diversity indices
+func.diversity.stats_A <- dbFD(traits_A, Abundances_A)
+CWM_happyforb_A <- cbind( CarbonAll_hasCOVER[,c(1,12)], func.diversity.stats_A$CWM, func.diversity.stats_A$FDis, func.diversity.stats_A$FEve, func.diversity.stats_A$FRic)
+names(CWM_happyforb_A)[names(CWM_happyforb_A) == "func.diversity.stats_A$FDis"] <- "FDis_A"
+names(CWM_happyforb_A)[names(CWM_happyforb_A) == "func.diversity.stats_A$FEve"] <- "FEve_A"
+names(CWM_happyforb_A)[names(CWM_happyforb_A) == "func.diversity.stats_A$FRic"] <- "FRic_A"
+write.csv(CWM_happyforb_A, "data/CWM_happyforb_A.csv")
+
+
+#C- current year 
+traits_C <- read.csv("data/traits_matched_C.csv")
+traits_C <- traits_C[,c(2:12)] #removing first column 
+rownames(traits_C) <- traits_C[,1]
+traits_C[,1] <- NULL
+
+#COVER DATA
+Abundances_C <- CarbonAll[,c(24, 34:61, 63:64)] 
+
+#Remove plots (rows) with zero native cover (of the 22 species); can't calculate CWM with no cover data
+Abundances_C <- subset(Abundances_C, COVER_C>0) 
+Abundances_C <- Abundances_C[,-1]
+CarbonAll_hasCOVER <- filter(CarbonAll, CarbonAll$COVER_C!="0") #47-IR has zero cover, so removed to make df sized match. 
+
+#Checking subsets of columns/rows to match. They match!
+identical(row.names(traits_C[1:30,]), colnames(Abundances_C[,1:30])) 
+
+#Calculate functional diversity indices and change column names
+func.diversity.stats_C <- dbFD(traits_C, Abundances_C)
+CWM_happyforb_C <- cbind(CarbonAll_hasCOVER[,c(1,12)], func.diversity.stats_C$CWM, func.diversity.stats_C$FDis, func.diversity.stats_C$FEve, func.diversity.stats_C$FRic)
+names(CWM_happyforb_C)[names(CWM_happyforb_C) == "func.diversity.stats_C$FDis"] <- "FDis_C"
+names(CWM_happyforb_C)[names(CWM_happyforb_C) == "func.diversity.stats_C$FEve"] <- "FEve_C"
+names(CWM_happyforb_C)[names(CWM_happyforb_C) == "func.diversity.stats_C$FRic"] <- "FRic_C"
+write.csv(CWM_happyforb_C, "data/CWM_happyforb_C.csv")
+
+
+#P- Prior year 
+traits_P <- read.csv("data/traits_matched_P.csv")
+traits_P <- traits_P[,c(2:12)] #removing first column 
+rownames(traits_P) <- traits_P[,1]
+traits_P[,1] <- NULL
+
+Abundances_P <- CarbonAll[,c(110, 78:105, 107:108)] 
+
+#Remove plots (rows) with zero native cover (of the 22 species); can't calculate CWM with no cover data
+Abundances_P <- subset(Abundances_P, Cover_NoBRODIA>0)
+Abundances_P <- Abundances_P[,-1]
+
+CarbonAll_hasCOVER_P <- filter(CarbonAll, CarbonAll$Cover_NoBRODIA!="0") 
+
+#calculate functional diversity indices
+func.diversity.stats_P <- dbFD(traits_P, Abundances_P)
+CWM_happyforb_P <- cbind(CarbonAll_hasCOVER_P[,c(1,12)], func.diversity.stats_P$CWM, func.diversity.stats_P$FDis, func.diversity.stats_P$FEve, func.diversity.stats_P$FRic)
+names(CWM_happyforb_P)[names(CWM_happyforb_P) == "func.diversity.stats_P$FDis"] <- "FDis_P"
+names(CWM_happyforb_P)[names(CWM_happyforb_P) == "func.diversity.stats_P$FEve"] <- "FEve_P"
+names(CWM_happyforb_P)[names(CWM_happyforb_P) == "func.diversity.stats_P$FRic"] <- "FRic_P"
+write.csv(CWM_happyforb_P, "data/CWM_happyforb_P.csv")
+
+
+#combine all CWM data with all other data!
+CarbonAll_CWM <- CarbonAll %>%
+  left_join(CWM_happyforb_C, by=c("Sample_ID", "Year")) %>%
+  left_join(CWM_happyforb_P, by=c("Sample_ID", "Year")) %>%
+  left_join(CWM_happyforb_A, by=c("Sample_ID", "Year"))
+
+#calculating diversity indices on full dataset and renaming
+Abundances_A <- CarbonAll[,c(122:152)]
+species_richness_A <-specnumber(Abundances_A)
+shannon_index_A <- diversity(Abundances_A, index="shannon")
+evenness_A <- shannon_index_A/ log(species_richness_A)
+CarbonAll_CWM$shannon_index_A <- shannon_index_A
+CarbonAll_CWM$evenness_A <- evenness_A
+CarbonAll_CWM$species_richness_A <- species_richness_A
+
+Abundances_P <- CarbonAll[,c(78:108)]
+species_richness_P <-specnumber(Abundances_P)
+shannon_index_P <- diversity(Abundances_P, index="shannon")
+evenness_P <- shannon_index_P/ log(species_richness_P)
+CarbonAll_CWM$shannon_index_P <- shannon_index_P
+CarbonAll_CWM$evenness_P <- evenness_P
+CarbonAll_CWM$species_richness_P <- species_richness_P
+
+Abundances_C <- CarbonAll[,c(34:64)] 
+species_richness_C <-specnumber(Abundances_C)
+shannon_index_C <- diversity(Abundances_C, index="shannon")
+evenness_C <- shannon_index_C/ log(species_richness_C)
+CarbonAll_CWM$shannon_index_C <- shannon_index_C
+CarbonAll_CWM$evenness_C <- evenness_C
+CarbonAll_CWM$species_richness_C <- species_richness_C
+write.csv(CarbonAll_CWM, "data/CarbonAll_CWM.csv")
+
+#creating log-transformed columns for seed mass and root length diameter because of skewed distribution of these trait values
+CarbonAll_CWM$logSM_C <- log(CarbonAll_CWM$SM_C)
+CarbonAll_CWM$logSM_P <- log(CarbonAll_CWM$SM_P)
+CarbonAll_CWM$logSM_A <- log(CarbonAll_CWM$SM_A)
+CarbonAll_CWM$logRLD_C <- log(CarbonAll_CWM$RLD_C)
+CarbonAll_CWM$logRLD_P <- log(CarbonAll_CWM$RLD_P)
+CarbonAll_CWM$logRLD_A <- log(CarbonAll_CWM$RLD_A)
+
+#creating log-transformed columns POM, but log transformation was not used in analyses in the end (full dataset was normal)
+CarbonAll_CWM$POM_Log <-log(CarbonAll_CWM$POM_TC)
+
+#subsetting dataframes by soil probe depth (0-15 and 15-30) Deep soils were not analyzed due to small dataset.
+CarbonShallow_CWM <- filter(CarbonAll_CWM, CarbonAll_CWM$Depth=="shallow")
+CarbonDeep_CWM <- filter(CarbonAll_CWM, CarbonAll_CWM$Depth=="deep")
+
+
+#All traits, and functional and species  diversity stats are scaled
+CarbonAll_CWM_scaledtraits<- CarbonShallow_CWM
+CarbonAll_CWM_scaledtraits[c(25:33,69:77, 157:210)]  <- scale(CarbonAll_CWM_scaledtraits[c(25:33,69:77,157:210)]) #scales functional groups, traits, diversity metrics, and traits that are log transformed
+CarbonAll_CWM_scaledtraits$goph_dist_P[is.na(CarbonAll_CWM_scaledtraits$goph_dist_P)] <- 0 #replacing blank gopher hole cells with NA
+
+```
+
+##Data Subsets
+```{r}
+#To create a consistent sample size for each model within each C pool, rows with NAs for core variables were removed. MAIN DATASET USED IN MANUSCRIPT.
+CarbonShallow_Comparable<- CarbonAll_CWM_scaledtraits[complete.cases(CarbonAll_CWM_scaledtraits[,c(24:110, 112:210)]), ]
+
+#Subset of two land use histories. Only used in initial data exploration/visualization. 
+CarbonShallow_CWMOLD<- filter(CarbonShallow_Comparable, CarbonShallow_Comparable$BlockAge=="6 yrs shrubs")
+CarbonShallow_CWMNEW <- filter(CarbonShallow_Comparable, CarbonShallow_Comparable$BlockAge=="2 yrs shrubs")
+
+#separating into deep and shallow soils - CarbonAll for now is all the combined tables together (data thus far, without the monoculture plots)
+CarbonAllShallow <- filter(CarbonAll, CarbonAll$Depth=="shallow")
+CarbonAllDeep <- filter(CarbonAll, CarbonAll$Depth=="deep")
+
+carbon_measures <- colnames(CarbonAll[,c(155, 11,14:15,17,19)]) #5 SOC pools and C:N
+carbon_measures_22 <- colnames(CarbonAll[,c(155, 11,14,17,19)]) #doesn't include WEOC
+soil_measures <- colnames(CarbonAll[,c(9,16, 18, 22)]) #N pools and pH
+FD_metrics <- colnames(CarbonShallow_CWM[, c(167:169, 180:182)])
+SD_metrics <- colnames(CarbonShallow_CWM[, c(200:201, 203:204)])
+species_C<-colnames(CarbonAllShallow)[24:67]
+species_P<-colnames(CarbonAllShallow)[68:108]
+fun_groups_C <-colnames(CarbonAllShallow[, c(25,26,29,30,33)])
+fun_groups_P <-colnames(CarbonAllShallow[, c(69,70,73,74,77)])
+fun_groups_All <-c(fun_groups_C, fun_groups_P)
+trait_names_C<-cbind("logSM_C","logRLD_C","LMA_C","N_C","Asat_C","WUE_C","RMF_C","Rdiam_C","SRL_C","RTD_C", "FDis_C", "FEve_C", "FRic_C")
+trait_names_P<-cbind("logSM_P","logRLD_P","LMA_P","N_P","Asat_P","WUE_P","RMF_P","Rdiam_P","SRL_P","RTD_P", "FDis_P", "FEve_P", "FRic_P")
+trait_names<-cbind("logSM_C +logSM_P","LMA_C + LMA_P","N_C+N_P","Asat_C+Asat_P","WUE_C+ WUE_P","RMF_C +RMF_P","logRLD_C +logRLD_P","Rdiam_C+Rdiam_P","SRL_C + SRL_P","RTD_C+RTD_P", "FDis_C + FDis_P", "FEve_C + FEve_P", "FRic_C +FRic_P")
+print(trait_names)
+species_diversity <- cbind("evenness_C", "evenness_P", "species_richness_C", "species_richness_P")
+PCAs_P <- cbind("PC1_P", "PC2_P")
+PCAs_C<- cbind("PC1_C", "PC2_C")
+
+
+```
+
+#__________
+##MODEL COMPARISON
+#Null & General Models
+```{r}
+#null models
+TC_null <- lmer(TC_Log ~1+(1|Block),  data=CarbonShallow_Comparable)
+POM_null <- lmer(POM_TC ~1+(1|Block),  data=CarbonShallow_Comparable)
+MAOM_null <- lmer(MAOM_TC ~1+(1|Block),  data=CarbonShallow_Comparable)
+MBC_null <- lmer(MBC ~1+(1|Block), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))
+WEOC_null <- lmer(WEOC ~1+(1|Block),  data=CarbonShallow_Comparable)
+#base environmental models from smaller data set with complete rows ("comparable")
+
+TC_general <-lmer(TC_Log ~ (1|Block)+Precip+Year+BlockAge, data=CarbonShallow_Comparable)
+summary(TC_general,ddf= "K") 
+anova(TC_general)
+AIC(TC_general)
+vif(TC_general)
+r.squaredGLMM(TC_general)
+
+MBC_general <-lmer(MBC ~ (1|Block)+Precip+Year+BlockAge, data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))
+anova(MBC_general)
+summary(MBC_general,ddf= "K") 
+AICc(MBC_general)
+vif(MBC_general)
+r.squaredGLMM(MBC_general)
+
+POM_general <-lmer(POM_TC ~ (1|Block)+Precip+Year+BlockAge, data=CarbonShallow_Comparable)
+anova(POM_general)
+summary(POM_general,ddf= "K") 
+AICc(POM_general)
+vif(POM_general)
+r.squaredGLMM(POM_general)
+
+MAOM_general <-lmer(MAOM_TC ~ (1|Block)+Precip+Year+BlockAge, data= CarbonShallow_Comparable)
+anova(MAOM_general)
+summary(MAOM_general,ddf= "K") 
+AIC(MAOM_general)
+vif(MAOM_general)
+r.squaredGLMM(MAOM_general)
+
+WEOC_general <-lmer(WEOC ~ (1|Block)+Precip+BlockAge, data= CarbonShallow_Comparable)
+anova(WEOC_general)
+summary(WEOC_general,ddf= "K") 
+AIC(WEOC_general)
+vif(WEOC_general)
+r.squaredGLMM(WEOC_general)
+
+```
+##QQ Plots
+```{r}
+qqnorm(resid(TC_general))
+qqline(resid(TC_general))
+plot(TC_general) 
+
+qqnorm(resid(MBC_general))
+qqline(resid(MBC_general))
+ plot(MBC_general) 
+
+
+qqnorm(resid(POM_general))
+qqline(resid(POM_general))
+ plot(POM_general) 
+
+
+qqnorm(resid(MAOM_general))
+qqline(resid(MAOM_general))
+ plot(MAOM_general) 
+
+qqnorm(resid(WEOC_general))
+qqline(resid(WEOC_general))
+ plot(WEOC_general) 
+qqPlot(CarbonShallow_CWM$WEOC)
+
+```
+
+
+#Trait PCAs 
+```{r}
+## all traits
+traits_PCA_C <- CarbonShallow_Comparable[, c(157:166)] 
+traits_PCA_P <- CarbonShallow_Comparable[, c(170:179)] 
+
+traits_pca_C<-prcomp(traits_PCA_C, center = TRUE, scale = TRUE)
+traits_pca_P<-prcomp(traits_PCA_P, center = TRUE, scale = TRUE)
+traits_pca_C$x[,1] <- -traits_pca_C$x[,1]
+traits_pca_C$rotation[,1] <- -traits_pca_C$rotation[,1]
+
+# get PC coordinates for all observations
+pcs_C<-data.frame(traits_pca_C$x)
+pcs_P<-data.frame(traits_pca_P$x)
+
+# add  column back so we can make a plot
+CarbonShallow_Comparable$PC1_C <- pcs_C$PC1
+CarbonShallow_Comparable$PC2_C <- pcs_C$PC2
+
+CarbonShallow_Comparable$PC1_P <- pcs_P$PC1
+CarbonShallow_Comparable$PC2_P <- pcs_P$PC2
+
+
+TC_pca12_C_X <-lmer(TC_Log ~ (1|Block)+Year+Precip*(
+                            PC1_C+PC2_C)+BlockAge*(
+                           PC1_C+PC2_C), data= CarbonShallow_Comparable)
+anova(TC_pca12_C_X,ddf= "K") 
+summary(TC_pca12_C_X)
+AIC(TC_pca12_C_X)
+vif(TC_pca12_C_X)
+r.squaredGLMM(TC_pca12_C_X)
+
+
+TC_pca12_P_X <-lmer(TC_Log ~ (1|Block)+Year+Precip*(
+                            PC1_P+PC2_P)+BlockAge*(
+                           PC1_P+PC2_P), data= CarbonShallow_Comparable)
+anova(TC_pca12_P_X,ddf= "K") 
+AIC(TC_pca12_P_X)
+vif(TC_pca12_P_X)
+r.squaredGLMM(TC_pca12_P_X)
+
+
+MBC_pca12_C_X <-lmer(MBC ~ (1|Block)+Year+Precip*(
+                            PC1_C+PC2_C)+BlockAge*(
+                            PC1_C+PC2_C), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))
+
+MBC_pca12_P_X <-lmer(MBC ~ (1|Block)+Year+Precip*(
+                            PC1_P+PC2_P)+BlockAge*(
+                            PC1_P+PC2_P), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))
+
+
+POM_pca12_P_X <-lmer(POM_TC ~ (1|Block)+Year+Precip*(
+                            PC1_P+PC2_P)+BlockAge*(
+                           PC1_P+PC2_P), data= CarbonShallow_Comparable)
+
+POM_pca12_C_X <-lmer(POM_TC ~ (1|Block)+Year+Precip*(
+                            PC1_C+PC2_C)+BlockAge*(
+                           PC1_C+PC2_C), data= CarbonShallow_Comparable)
+
+
+
+MAOM_pca12_P_X <-lmer(MAOM_TC ~ (1|Block)+Year+Precip*(
+                            PC1_P+PC2_P)+BlockAge*(
+                           PC1_P+PC2_P), data= CarbonShallow_Comparable)
+
+MAOM_pca12_C_X <-lmer(MAOM_TC ~ (1|Block)+Year+Precip*(
+                            PC1_C+PC2_C)+BlockAge*(
+                           PC1_C+PC2_C), data= CarbonShallow_Comparable)
+
+WEOC_pca12_P_X <-lmer(WEOC ~ (1|Block)+Precip*(
+                            PC1_P+PC2_P)+BlockAge*(
+                           PC1_P+PC2_P), data= CarbonShallow_Comparable)
+
+WEOC_pca12_C_X <-lmer(WEOC ~ (1|Block)+Precip*(
+                            PC1_C+PC2_C)+BlockAge*(
+                           PC1_C+PC2_C), data= CarbonShallow_Comparable)
+```
+
+#Functional Diveristy
+```{r}
+TC_FDiversity_C_X <-lmer(TC_Log ~ (1|Block)+Year+Precip*(
+                            FEve_C+FRic_C)+BlockAge*(
+                            FEve_C+FRic_C), data= CarbonShallow_Comparable)
+anova(TC_FDiversity_C_X,ddf= "K") 
+AICc(TC_FDiversity_C_X)
+vif(TC_FDiversity_C_X)
+r.squaredGLMM(TC_FDiversity_C_X)
+
+TC_FDiversity_P_X <-lmer(TC_Log ~ (1|Block)+Year+Precip*(
+                            FEve_P+FRic_P)+BlockAge*(
+                            FEve_P+FRic_P), data= CarbonShallow_Comparable)
+anova(TC_FDiversity_P_X,ddf= "K") 
+AICc(TC_FDiversity_P_X)
+vif(TC_FDiversity_P_X)
+r.squaredGLMM(TC_FDiversity_P_X)
+
+MBC_FDiversity_C_X <-lmer(MBC ~ (1|Block)+Year+Precip*(
+                            FEve_C+FRic_C)+BlockAge*(
+                            FEve_C+FRic_C), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))
+anova(MBC_FDiversity_C_X,ddf= "K") 
+AICc(MBC_FDiversity_C_X)
+vif(MBC_FDiversity_C_X)
+r.squaredGLMM(MBC_FDiversity_C_X)
+
+MBC_FDiversity_P_X <-lmer(MBC ~ (1|Block)+Year+Precip*(
+                            FEve_P+FRic_P)+BlockAge*(
+                            FEve_P+FRic_P), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))
+anova(MBC_FDiversity_P_X,ddf= "K") 
+AICc(MBC_FDiversity_P_X)
+vif(MBC_FDiversity_P_X)
+r.squaredGLMM(MBC_FDiversity_P_X)
+
+POM_FDiversity_C_X <-lmer(POM_TC ~ (1|Block)+Year+Precip*(
+                            FEve_C+FRic_C)+BlockAge*(
+                            FEve_C+FRic_C), data= CarbonShallow_Comparable)
+summary(POM_FDiversity_C_X,ddf= "K") 
+AICc(POM_FDiversity_C_X)
+vif(POM_FDiversity_C_X)
+r.squaredGLMM(POM_FDiversity_C_X)
+
+POM_FDiversity_P_X <-lmer(POM_TC ~ (1|Block)+Year+Precip*(
+                            FEve_P+FRic_P)+BlockAge*(
+                            FEve_P+FRic_P), data= CarbonShallow_Comparable)
+anova(POM_FDiversity_P_X,ddf= "K") 
+AICc(POM_FDiversity_P_X)
+vif(POM_FDiversity_P_X)
+r.squaredGLMM(POM_FDiversity_P_X)
+
+MAOM_FDiversity_C_X <-lmer(MAOM_TC ~ (1|Block)+Year+Precip*(
+                            FEve_C+FRic_C)+BlockAge*(
+                            FEve_C+FRic_C), data= CarbonShallow_Comparable)
+anova(MAOM_FDiversity_C_X,ddf= "K") 
+AICc(MAOM_FDiversity_C_X)
+vif(MAOM_FDiversity_C_X)
+r.squaredGLMM(MAOM_FDiversity_C_X)
+
+MAOM_FDiversity_P_X <-lmer(MAOM_TC ~ (1|Block)+Year+Precip*(
+                            FEve_P+FRic_P)+BlockAge*(
+                            FEve_P+FRic_P), data= CarbonShallow_Comparable)
+anova(MAOM_FDiversity_P_X,ddf= "K") 
+AICc(MAOM_FDiversity_P_X)
+vif(MAOM_FDiversity_P_X)
+r.squaredGLMM(MAOM_FDiversity_P_X)
+
+WEOC_FDiversity_C_X <-lmer(WEOC ~ (1|Block)+Precip*(
+                            FEve_C+FRic_C)+BlockAge*(
+                            FEve_C+FRic_C), data= CarbonShallow_Comparable)
+anova(WEOC_FDiversity_C_X) 
+summary(WEOC_FDiversity_C_X)
+AICc(WEOC_FDiversity_C_X)
+vif(WEOC_FDiversity_C_X)
+r.squaredGLMM(WEOC_FDiversity_C_X)
+
+WEOC_FDiversity_P_X <-lmer(WEOC ~ (1|Block)+Precip*(
+                            FEve_P+FRic_P)+BlockAge*(
+                            FEve_P+FRic_P), data= CarbonShallow_Comparable)
+anova(WEOC_FDiversity_P_X,ddf= "K") 
+AICc(WEOC_FDiversity_P_X)
+vif(WEOC_FDiversity_P_X)
+r.squaredGLMM(WEOC_FDiversity_P_X)
+```
+
+#Species Diversity
+```{r}
+
+TC_SDiversity_C_X <-lmer(TC_Log ~ (1|Block)+Year+Precip*(
+                            evenness_C+species_richness_C)+BlockAge*(
+                            evenness_C+species_richness_C), data= CarbonShallow_Comparable)
+anova(TC_SDiversity_C_X,ddf= "K") 
+AIC(TC_SDiversity_C_X)
+vif(TC_SDiversity_C_X)
+r.squaredGLMM(TC_SDiversity_C_X)
+
+TC_SDiversity_P_X <-lmer(TC_Log ~ (1|Block)+Year+Precip*(
+                            evenness_P+species_richness_P)+BlockAge*(
+                            evenness_P+species_richness_P), data= CarbonShallow_Comparable)
+anova(TC_SDiversity_P_X,ddf= "K") 
+AIC(TC_SDiversity_P_X)
+vif(TC_SDiversity_P_X)
+r.squaredGLMM(TC_SDiversity_P_X)
+
+
+MBC_SDiversity_C_X <-lmer(MBC ~ (1|Block)+Year+Precip*(
+                            evenness_C+species_richness_C)+BlockAge*(
+                            evenness_C+species_richness_C), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))
+anova(MBC_SDiversity_C_X,ddf= "K") 
+AIC(MBC_SDiversity_C_X)
+vif(MBC_SDiversity_C_X)
+r.squaredGLMM(MBC_SDiversity_C_X)
+
+MBC_SDiversity_P_X <-lmer(MBC ~ (1|Block)+Year+Precip*(
+                            evenness_P+species_richness_P)+BlockAge*(
+                            evenness_P+species_richness_P), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))
+summary(MBC_SDiversity_P_X,ddf= "K") 
+anova(MBC_SDiversity_P_X)
+AIC(MBC_SDiversity_P_X)
+vif(MBC_SDiversity_P_X)
+r.squaredGLMM(MBC_SDiversity_P_X)
+
+
+POM_SDiversity_C_X <-lmer(POM_TC ~ (1|Block)+Year+Precip*(
+                            evenness_C+species_richness_C)+BlockAge*(
+                            evenness_C+species_richness_C),data= CarbonShallow_Comparable)
+anova(POM_SDiversity_C_X) 
+AIC(POM_SDiversity_C_X)
+vif(POM_SDiversity_C_X)
+r.squaredGLMM(POM_SDiversity_C_X)
+
+POM_SDiversity_P_X <-lmer(POM_TC ~ (1|Block)+Year+Precip*(
+                            evenness_P+species_richness_P)+BlockAge*(
+                            evenness_P+species_richness_P), data= CarbonShallow_Comparable)
+anova(POM_SDiversity_P_X) 
+AIC(POM_SDiversity_P_X)
+vif(POM_SDiversity_P_X)
+r.squaredGLMM(POM_SDiversity_P_X)
+
+
+MAOM_SDiversity_C_X <-lmer(MAOM_TC ~ (1|Block)+Year+Precip*(
+                            evenness_C+species_richness_C)+BlockAge*(
+                            evenness_C+species_richness_C), data= CarbonShallow_Comparable)
+anova(MAOM_SDiversity_C_X) 
+AIC(MAOM_SDiversity_C_X)
+vif(MAOM_SDiversity_C_X)
+r.squaredGLMM(MAOM_SDiversity_C_X)
+
+MAOM_SDiversity_P_X <-lmer(MAOM_TC ~ (1|Block)+Year+Precip*(
+                            evenness_P+species_richness_P)+BlockAge*(
+                            evenness_P+species_richness_P), data= CarbonShallow_Comparable)
+anova(MAOM_SDiversity_P_X) 
+AIC(MAOM_SDiversity_P_X)
+vif(MAOM_SDiversity_P_X)
+r.squaredGLMM(MAOM_SDiversity_P_X)
+
+WEOC_SDiversity_C_X <-lmer(WEOC ~ (1|Block)+Precip*(
+                            evenness_C+species_richness_C)+BlockAge*(
+                            evenness_C+species_richness_C), data= CarbonShallow_Comparable)
+anova(WEOC_SDiversity_C_X) 
+AIC(WEOC_SDiversity_C_X)
+vif(WEOC_SDiversity_C_X)
+r.squaredGLMM(WEOC_SDiversity_C_X)
+
+WEOC_SDiversity_P_X <-lmer(WEOC ~ (1|Block)+Precip*(
+                            evenness_P+species_richness_P)+BlockAge*(
+                            evenness_P+species_richness_P), data= CarbonShallow_Comparable)
+anova(WEOC_SDiversity_P_X) 
+AIC(WEOC_SDiversity_P_X)
+vif(WEOC_SDiversity_P_X)
+r.squaredGLMM(WEOC_SDiversity_P_X)
+
+```
+
+#Model Comparisons (AIC)
+```{r}
+#TC
+anova(TC_null,TC_general,  TC_SDiversity_P_X, TC_SDiversity_C_X, TC_FDiversity_C_X, TC_FDiversity_P_X, TC_pca12_C_X, TC_pca12_P_X)
+anova(TC_null,TC_general) 
+anova(TC_general, TC_SDiversity_C_X)
+anova(TC_general, TC_SDiversity_P_X) 
+anova(TC_general, TC_FDiversity_C_X)
+anova(TC_general, TC_FDiversity_P_X)
+anova(TC_general, TC_pca12_C_X)
+anova(TC_general, TC_pca12_P_X)
+
+
+#MBC
+anova(MBC_null, MBC_general, MBC_SDiversity_P_X, MBC_FDiversity_C_X, MBC_FDiversity_P_X, MBC_SDiversity_C_X, MBC_pca12_C_X, MBC_pca12_P_X) 
+anova(MBC_null,MBC_general) 
+anova(MBC_general, MBC_SDiversity_C_X)
+anova(MBC_general, MBC_SDiversity_P_X) 
+anova(MBC_general, MBC_FDiversity_C_X)
+anova(MBC_general, MBC_FDiversity_P_X)
+anova(MBC_general, MBC_pca12_C_X)
+anova(MBC_general, MBC_pca12_P_X) 
+
+#POM
+anova(POM_null, POM_general, POM_SDiversity_P_X, POM_FDiversity_C_X, POM_FDiversity_P_X, POM_SDiversity_C_X) 
+anova(POM_general, POM_null) 
+anova(POM_general, POM_SDiversity_C_X)
+anova(POM_general, POM_SDiversity_P_X)
+anova(POM_general, POM_FDiversity_C_X)
+anova(POM_general, POM_FDiversity_P_X)
+anova(POM_general, POM_pca12_C_X) 
+anova(POM_general, POM_pca12_P_X) 
+
+#MAOM
+anova(MAOM_null, MAOM_general,MAOM_SDiversity_C_X, MAOM_FDiversity_C_X, MAOM_FDiversity_P_X,  MAOM_SDiversity_P_X) # species_P_X p= 0.005, SDiv_C = p=0.04
+anova(MAOM_general, MAOM_null) #different than null
+anova(MAOM_general, MAOM_SDiversity_C_X)  # 0.0418 (***lowest AIC***)
+anova(MAOM_general, MAOM_SDiversity_P_X)
+anova(MAOM_general, MAOM_FDiversity_C_X)
+anova(MAOM_general, MAOM_FDiversity_P_X)
+anova(MAOM_general, MAOM_pca12_C_X)
+anova(MAOM_general, MAOM_pca12_P_X)
+
+
+
+#WEOC
+anova(WEOC_null, WEOC_general, WEOC_FDiversity_C_X, WEOC_FDiversity_P_X, WEOC_SDiversity_C_X, WEOC_SDiversity_P_X) 
+anova(WEOC_null, WEOC_general) 
+anova(WEOC_general, WEOC_SDiversity_C_X)
+anova(WEOC_general, WEOC_SDiversity_P_X)
+anova(WEOC_general, WEOC_FDiversity_C_X)
+anova(WEOC_general, WEOC_FDiversity_P_X)
+anova(WEOC_general, WEOC_pca12_C_X)
+anova(WEOC_general, WEOC_pca12_P_X)
+
+```
+#__________
+##EFFECTS
+
+#Trait PCA effects
+```{r}
+#models for each carbon pool against PC1 and PC2 of the current year and prior year, including interactions with with precipitation and land use
+lapply(PCAs_C, function(t){
+  mod<-eval(parse(text=paste0("lmer(log(TC_mg_gsoil)~Year+BlockAge*",t,"+Precip*",t,"+(1|Block), CarbonShallow_Comparable)")))
+  anova(mod)
+}) 
+
+lapply(PCAs_P, function(t){
+  mod<-eval(parse(text=paste0("lmer(log(TC_mg_gsoil)~Year+BlockAge*",t,"+Precip*",t,"+(1|Block), CarbonShallow_Comparable)")))
+  anova(mod)
+}) 
+
+#MBC
+lapply(PCAs_C, function(t){
+  mod<-eval(parse(text=paste0("lmer(MBC~Year+BlockAge*",t,"+Precip*",t,"+(1|Block),  data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))"))) 
+  anova(mod)
+}) 
+
+lapply(PCAs_P, function(t){
+  mod<-eval(parse(text=paste0("lmer(MBC~Year+BlockAge*",t,"+Precip*",t,"+(1|Block), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))"))) 
+  anova(mod)
+}) 
+
+
+#POM
+lapply(PCAs_C, function(t){
+  mod<-eval(parse(text=paste0("lmer(POM_TC~Year+BlockAge*",t,"+Precip*",t,"+(1|Block), CarbonShallow_Comparable)")))
+  anova(mod)
+}) 
+
+lapply(PCAs_P, function(t){
+  mod<-eval(parse(text=paste0("lmer(POM_TC~Year+BlockAge*",t,"+Precip*",t,"+(1|Block), CarbonShallow_Comparable)")))
+  anova(mod)
+}) 
+
+#MAOM
+ lapply(PCAs_C, function(t){
+  mod<-eval(parse(text=paste0("lmer(MAOM_TC~Year+BlockAge*",t,"+Precip*",t,"+(1|Block), CarbonShallow_Comparable)")))
+  anova(mod)
+}) 
+
+lapply(PCAs_P, function(t){
+  mod<-eval(parse(text=paste0("lmer(MAOM_TC~Year+BlockAge*",t,"+Precip*",t,"+(1|Block),  CarbonShallow_Comparable)")))
+  anova(mod)
+}) 
+
+#WEOC
+lapply(PCAs_C, function(t){
+  mod<-eval(parse(text=paste0("lmer(WEOC~BlockAge*",t,"+Precip*",t,"+(1|Block), CarbonShallow_Comparable)")))
+anova(mod)
+}) 
+
+#More details on significant trait effects pulled from above trait models. 
+MBC_PC1_P <-lmer(MBC ~ Precip*PC1_P+Year+BlockAge*PC1_P+(1|Block), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))
+anova(MBC_PC1_P)
+summary(MBC_PC1_P,ddf= "K") 
+AIC(MBC_PC1_P)
+r.squaredGLMM(MBC_PC1_P)
+emtrends(MBC_PC1_P, pairwise ~ Precip, var = "PC1_P")
+
+MAOM_PC2_C <-lmer(MAOM_TC ~ Precip*PC2_C+Year+BlockAge*PC2_C+(1|Block), data= CarbonShallow_Comparable)
+anova(MAOM_PC2_C )
+summary(MAOM_PC2_C ,ddf= "K") 
+AIC(MAOM_PC2_C )
+r.squaredGLMM(MAOM_PC2_C )
+emtrends(MAOM_PC2_C , pairwise ~ BlockAge, var = "PC2_C")
+
+WEOC_PC2_C <-lmer(WEOC ~ Precip*PC2_C+BlockAge*PC2_C+(1|Block), data= CarbonShallow_Comparable)
+anova(WEOC_PC2_C)
+summary(WEOC_PC2_C,ddf= "K") 
+AIC(WEOC_PC2_C)
+r.squaredGLMM(WEOC_PC2_C)
+emtrends(WEOC_PC2_C, pairwise ~ BlockAge, var = "PC2_C")
+
+#testing correlation between species evennes and PC2 (in current year vegetation), mentioned in manuscript. 
+summary(lmer(MAOM_TC ~ Precip*PC2_C+Year+BlockAge*PC2_C+evenness_C*BlockAge+(1|Block), data= CarbonShallow_Comparable))
+cor.test(CarbonShallow_Comparable$evenness_C,CarbonShallow_Comparable$PC2_C, 
+                    method = "pearson")
+      
+```
+
+#Spe. Div. Effects
+```{r}
+#models for each carbon pool against species evenness and richness of the current year and prior year, including interactions with precipitation and land use
+lapply(SD_metrics, function(f){
+  mod<-eval(parse(text=paste0("lmer(TC_Log~Year+BlockAge*",f,"+Precip*",f,"+(1|Block), CarbonShallow_Comparable)")))
+  anova(mod)
+}) 
+
+lapply(SD_metrics, function(f){
+  mod<-eval(parse(text=paste0("lmer(MBC~Year+BlockAge*",f,"+Precip*",f,"+(1|Block), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))"))) 
+  anova(mod)
+}) 
+
+lapply(SD_metrics, function(f){
+  mod<-eval(parse(text=paste0("lmer(POM_TC~Year+BlockAge*",f,"+Precip*",f,"+(1|Block), CarbonShallow_Comparable)")))
+  anova(mod)
+}) 
+
+lapply(SD_metrics, function(f){
+  mod<-eval(parse(text=paste0("lmer(MAOM_TC~Year+BlockAge*",f,"+Precip*",f,"+(1|Block), CarbonShallow_Comparable)")))
+  anova(mod)
+}) 
+lapply(SD_metrics, function(f){
+  mod<-eval(parse(text=paste0("lmer(WEOC~BlockAge*",f,"+Precip*",f,"+(1|Block), CarbonShallow_Comparable)")))
+  anova(mod)
+}) 
+
+#More details on significant functional diversity effects pulled from above models.
+TC_SR <-lmer(TC_Log ~ Precip*species_richness_P+Year+BlockAge*species_richness_P+(1|Block), data= CarbonShallow_Comparable)
+anova(TC_SR)
+summary(TC_SR,ddf= "K") 
+AIC(TC_SR)
+r.squaredGLMM(TC_SR)
+emtrends(TC_SR, pairwise ~ Precip, var = "species_richness_P")
+
+TC_SE <-lmer(TC_Log ~ Precip*evenness_C+Year+BlockAge*evenness_C+(1|Block), data= CarbonShallow_Comparable)
+anova(TC_SE)
+summary(TC_SE,ddf= "K") 
+AIC(TC_SE)
+r.squaredGLMM(TC_SE)
+emtrends(TC_SE, pairwise ~ Precip, var = "evenness_C")
+
+
+MBC_SE_Precip <-lmer(MBC ~ Precip*evenness_P+Year+BlockAge*evenness_P+(1|Block), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))
+anova(MBC_SE_Precip) 
+summary(MBC_SE_Precip)
+AIC(MBC_SE_Precip)
+r.squaredGLMM(MBC_SE_Precip)
+emtrends(MBC_SE_Precip, pairwise ~ Precip, var = "evenness_P")
+emtrends(MBC_SE_Precip, var = "evenness_P")
+
+
+MAOM_SE_Precip <-lmer(MAOM_TC ~ Precip*evenness_P+Year+BlockAge*evenness_P+(1|Block), data= CarbonShallow_Comparable)
+anova(MAOM_SE_Precip) 
+AIC(MAOM_SE_Precip)
+r.squaredGLMM(MAOM_SE_Precip)
+emtrends(MAOM_SE_Precip, pairwise ~ Precip, var = "evenness_P")
+
+
+MAOM_SE_LU <-lmer(MAOM_TC ~ Precip*evenness_C+Year+BlockAge*evenness_C+(1|Block), data= CarbonShallow_Comparable)
+anova(MAOM_SE_LU) 
+AIC(MAOM_SE_LU)
+r.squaredGLMM(MAOM_SE_LU)
+emtrends(MAOM_SE_LU, pairwise ~ BlockAge, var = "evenness_C")
+
+MAOM_SR <-lmer(MAOM_TC ~ Precip*species_richness_C+Year+BlockAge*species_richness_C+(1|Block), data= CarbonShallow_Comparable)
+anova(MAOM_SR ) 
+summary(MAOM_SR)
+AIC(MAOM_SR )
+r.squaredGLMM(MAOM_SR)
+emtrends(MAOM_SR ,  var = "species_richness_C")
+
+```
+
+#Fun. Div. Effects
+```{r}
+#models for each carbon pool against functional evenness and richness of the current year and prior year, including interactions with precipitation and land use
+lapply(FD_metrics, function(f){
+  mod<-eval(parse(text=paste0("lmer(TC_Log~Year+BlockAge*",f,"+Precip*",f,"+(1|Block), CarbonShallow_Comparable)")))
+  anova(mod)
+}) 
+
+lapply(FD_metrics, function(f){
+  mod<-eval(parse(text=paste0("lmer(MBC~Year+BlockAge*",f,"+Precip*",f,"+(1|Block), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))"))) 
+  anova(mod)
+}) 
+
+lapply(FD_metrics, function(f){
+  mod<-eval(parse(text=paste0("lmer(POM_TC~Year+BlockAge*",f,"+Precip*",f,"+(1|Block), CarbonShallow_Comparable)")))
+  anova(mod)
+}) 
+
+lapply(FD_metrics, function(f){
+  mod<-eval(parse(text=paste0("lmer(MAOM_TC~Year+BlockAge*",f,"+Precip*",f,"+(1|Block), CarbonShallow_Comparable)")))
+  anova(mod)
+}) 
+
+lapply(FD_metrics, function(f){
+  mod<-eval(parse(text=paste0("lmer(WEOC~BlockAge*",f,"+Precip*",f,"+(1|Block), CarbonShallow_Comparable)")))
+  anova(mod)
+}) 
+
+
+#More details on significant functional diversity effects pulled from above models.
+TC_FE_C <-lmer(TC_Log ~ Precip*FEve_C+Year+BlockAge*FEve_C+(1|Block), data= CarbonShallow_Comparable)
+anova(TC_FE_C)
+summary(TC_FE_C,ddf= "K") 
+AIC(TC_FE_C)
+r.squaredGLMM(TC_FE_C)
+emtrends(TC_FE_C, pairwise ~ BlockAge, var = "FEve_C")
+
+POM_FE <-lmer(POM_TC ~ Precip*FEve_C+Year+BlockAge*FEve_C+(1|Block), data= CarbonShallow_Comparable)
+anova(POM_FE)
+summary(POM_FE,ddf= "K") 
+AIC(POM_FE)
+r.squaredGLMM(POM_FE)
+emtrends(POM_FE, pairwise ~ BlockAge, var = "FEve_C")
+
+POM_FR <-lmer(POM_TC ~ Precip*FRic_C+Year+BlockAge*FRic_C+(1|Block), data= CarbonShallow_Comparable)
+anova(POM_FR)
+summary(POM_FR,ddf= "K") 
+AIC(POM_FR)
+r.squaredGLMM(POM_FR)
+emtrends(POM_FR, pairwise ~ Precip, var = "FRic_C")
+
+MAOM_FR <-lmer(MAOM_TC ~ Precip*FRic_C+Year+BlockAge*FRic_C+(1|Block), data= CarbonShallow_Comparable)
+anova(MAOM_FR)
+summary(MAOM_FR,ddf= "K") 
+AIC(MAOM_FR)
+r.squaredGLMM(MAOM_FR)
+emtrends(MAOM_FR, pairwise ~ Precip, var = "FRic_C")
+
+```
+
+
+#__________
+##FIGURES
+#Fig. 1: Environmental & temporal variables
+```{r}
+
+MAOM_yr_ba <- ggplot(CarbonAllShallow, aes(x=Year, y=MAOM_TC))+
+  geom_boxplot(aes(fill=BlockAge))+
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.y = element_text(hjust=0)) +
+  labs(y=expression(MAOC ~ (mg ~ C ~ g^-1 ~ soil)))+    scale_fill_manual(values=alpha(c("darkolivegreen2","darkolivegreen4"),.7)) +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+   geom_signif(comparisons = list(c("2022", "2023")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off")
+
+
+POM_yr_ba <- ggplot(CarbonAllShallow, aes(x=Year, y=POM_TC))+
+  geom_boxplot(aes(fill=BlockAge))+
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.y = element_text(hjust=0)) +
+  labs(y=expression(POC ~ (mg ~ C ~ g^-1 ~ soil)))+
+    scale_fill_manual(values=alpha(c("darkolivegreen2","darkolivegreen4"),.7)) +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+   geom_signif(comparisons = list(c("2022", "2023")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off")
+
+
+TC_yr_ba <- ggplot(CarbonAllShallow, aes(x=Year, y=TC_Log))+
+  geom_boxplot(aes(fill=BlockAge))+
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.y = element_text(hjust=0)) +
+  labs(y=expression(log(TC) ~ (mg ~ C ~ g^-1 ~ soil)))+
+  scale_fill_manual(values=alpha(c("darkolivegreen2","darkolivegreen4"),.7)) +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2)+
+   geom_signif(comparisons = list(c("2022", "2023")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off")
+
+
+MBC_yr_ba <- ggplot(data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'), aes(x=Year, y=MBC))+
+  geom_boxplot(aes(fill=BlockAge))+
+  theme_classic() +
+  labs(x="Year", y = expression("MBC ("*mu*"g C g"^-1*" soil)")) +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.y = element_text(hjust=0)) +
+  scale_fill_manual(values=alpha(c("darkolivegreen2","darkolivegreen4"),.7)) +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+   geom_signif(comparisons = list(c("2022", "2023")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off")
+
+
+WEOC_yr_ba <- ggplot(CarbonAllShallow, aes(x=BlockAge, y=WEOC))+
+  geom_boxplot(aes(fill=BlockAge))+
+  theme_classic() +
+  theme(plot.title = element_text(size=10), axis.text.x = element_text(size = 6), legend.title = element_text(size=8), legend.text = element_text(size=6), axis.title.y = element_text(hjust=0), legend.margin=margin(c(0,0,0,0)))+
+  labs(fill="Land Use", y = expression("WEOC ("*mu*"g C g"^-1*" soil)"))+
+  scale_fill_manual(values=alpha(c("darkolivegreen2","darkolivegreen4"),.7)) +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+   geom_signif(comparisons = list(c("6 yrs shrubs", "2 yrs shrubs")), map_signif_level=TRUE)  +
+   coord_cartesian(clip = "off") +
+   scale_x_discrete(labels=c('2 yrs', '6 yrs')) +
+    labs(x = "Land Use History")
+
+
+MAOM_precip <- ggplot(CarbonAllShallow, aes(x=Precip, y=MAOM_TC))+
+  geom_boxplot(aes(fill=Precip))+
+  theme_classic() +
+ theme(plot.title = element_text(size=10), legend.position = "none",axis.title.y = element_text(hjust=0)) +labs(y=expression(MAOC ~ (mg ~ C ~ g^-1 ~ soil)))+
+    scale_fill_manual(values=alpha(c("darkcyan","cadetblue2"),.7), labels=c('125%', '50%')) +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) + 
+  geom_signif(comparisons = list(c("50%", "125%")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off") +
+    labs(x = "Precipitation")
+
+
+Fig1 <- plot_grid(TC_yr_ba, MBC_yr_ba, WEOC_yr_ba, POM_yr_ba, MAOM_yr_ba,  MAOM_precip, 
+          ncol = 3, nrow = 2, labels =c("(a)", "(b)","(c)","(d)","(e)","(f)"), labelsize=10, align="hv", label_x=-.02) 
+print(Fig1)
+ggsave("Figure1.png", plot=Fig1, height=12, width=18, units=c("cm"), dpi=600)
+
+
+
+```
+
+#Legend setup
+```{r}
+MAOM_LMA_C_blockage_decoy <- ggplot(aes(y=MAOM_TC, x=LMA_C, color=BlockAge, na.rm=TRUE), data=CarbonAll_CWM_scaledtraits)+
+geom_smooth(method="lm") +
+  geom_point(aes(shape=BlockAge), alpha=.8) +
+  labs(col="Land Use", shape= "Land Use", x="LMA (Current Year)", y=expression(MAOC ~ (mg ~ C ~ g^-1 ~ soil))) + 
+  theme_classic() +
+  theme(plot.title = element_text(size=12)) +
+   scale_color_manual(values=c("darkolivegreen2","darkolivegreen4")) 
+
+MAOM_FRic<-ggplot(aes(y=MAOM_TC, x=FRic_C, color=Precip, na.rm=TRUE), data=CarbonAll_CWM_scaledtraits)+
+geom_smooth(method="lm") +
+  geom_point(aes(shape=Precip), alpha=.8) +
+  labs(x="FRic (Current Year)",  y=expression(MAOC ~ (mg ~ C ~ g^-1 ~ soil))) + 
+  theme_classic() +
+  theme(plot.title = element_text(size=12), legend.position = c(.85, .85))+
+    scale_color_manual(values=c("darkcyan","cadetblue2"))
+
+LandUse_legend <- get_legend(MAOM_LMA_C_blockage_decoy)
+Precip_legend <- get_legend(MAOM_FRic)
+
+```
+#Fig. 2: Species Diversity Graphs
+```{r}
+
+#Precip interactions
+
+TC_richness_P_precip<-ggplot(aes(y=TC_Log, x=species_richness_P, color=Precip, na.rm=TRUE), data=CarbonShallow_Comparable)+
+geom_smooth(method="lm") +
+  geom_point(aes(shape=Precip), alpha=.8) +
+  labs(x="Sp. Richness (Prior Yr)", y=expression(log(TC) ~ (mg ~ C ~ g^-1 ~ soil)))+
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none", axis.title.y = element_text(hjust=0))  +
+    scale_color_manual(values=c("darkcyan","cadetblue2"))
+
+TC_evenness_c_precip<-ggplot(aes(y=TC_Log, x=evenness_C, color=Precip, na.rm=TRUE), data=CarbonShallow_Comparable)+
+geom_smooth(method="lm") +
+  geom_point(aes(shape=Precip), alpha=.8) +
+  labs(x="Sp. Evenness (Current Yr)", y=expression(log(TC) ~ (mg ~ C ~ g^-1 ~ soil)))+
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none", axis.title.y = element_text(hjust=0))  +
+    scale_color_manual(values=c("darkcyan","cadetblue2"))
+
+
+MBC_evenness_p_precip<-ggplot(aes(y=MBC, x=evenness_P, color=Precip, na.rm=TRUE), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))+
+geom_smooth(method="lm") +
+  geom_point(aes(shape=Precip), alpha=.8) +
+  labs(x="Sp. Evenness (Prior Yr)", y = expression("MBC ("*mu*"g C g"^-1*" soil)")) +
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none", axis.title.y = element_text(hjust=0)) +
+    scale_color_manual(values=c("darkcyan","cadetblue2"))
+
+
+MAOM_evenness_P_precip<-ggplot(aes(y=MAOM_TC, x=evenness_P, color=Precip, na.rm=TRUE), data=CarbonShallow_Comparable)+
+geom_smooth(method="lm") +
+  geom_point(aes(shape=Precip), alpha=.8) +
+  labs(x="Sp. Evenness (Prior Yr)", y=expression(MAOC ~ (mg ~ C ~ g^-1 ~ soil)))+
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none", axis.title.y = element_text(hjust=0))  +
+    scale_color_manual(values=c("darkcyan","cadetblue2"))
+
+#Land use interactions 
+MAOM_evenness_C_block<- ggplot(aes(y=MAOM_TC, x=evenness_C, color=BlockAge, na.rm=TRUE), data=CarbonShallow_Comparable)+
+geom_smooth(method="lm") +
+  geom_point(aes(shape=BlockAge), alpha=.8) +
+  labs(col="Land Use", shape= "Land Use", x="Sp. Evenness (Current Yr)", y=expression(MAOC ~ (mg ~ C ~ g^-1 ~ soil)))+
+  theme_classic() +
+  theme(plot.title = element_text(size=12), legend.position = "none", axis.title.y = element_text(hjust=0)) +
+   scale_color_manual(values=c("darkolivegreen2","darkolivegreen4"))
+
+#Figure 2
+SP_DIV_PLOTS <- plot_grid(TC_richness_P_precip, TC_evenness_c_precip, MBC_evenness_p_precip,  MAOM_evenness_P_precip, MAOM_evenness_C_block,
+          ncol = 3, nrow = 2, align="hv", labels = c("(a)", "(b)", "(c)", "(d)", "(e)"), label_x=-.02) 
+
+Fig2 <- SP_DIV_PLOTS + draw_grob(LandUse_legend, 2/3, 0, .3, .4) + draw_grob(Precip_legend, .5, 0, .345, .45 )
+print(Fig2)
+ggsave("Figure2.png", plot=Fig2, height=12, width=18, units=c("cm"), dpi=600)
+
+
+# Simple/Main effects
+MBC_evenness_P<-ggplot(aes(y=MBC, x=evenness_P, na.rm=TRUE), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))+
+geom_smooth(method="lm") +
+  geom_point(aes(), alpha=.8) +
+  labs(x="Sp. Evenness (Prior Year)", y = expression("MBC ("*mu*"g C g"^-1*" soil)")) +
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none", axis.title.y = element_text(hjust=0) )+
+  xlim(-3,2)
+
+MAOM_richness_C<- ggplot(aes(y=MAOM_TC, x=species_richness_C, na.rm=TRUE), data=CarbonShallow_Comparable)+
+geom_smooth(method="lm") +
+  geom_point() +
+  labs(col="Land Use", shape= "Land Use", x="Species richness (Current Year)",y=expression(MAOC ~ (mg ~ C ~ g^-1 ~ soil)))+
+  theme_classic() +
+  theme(plot.title = element_text(size=12), axis.title.y = element_text(hjust=0)) 
+
+#pure evenness/richness on SOC
+plot_grid(MBC_evenness_P,MAOM_richness_C,
+          ncol = 2, nrow = 1)
+
+
+
+```
+
+
+#Fig 3: Trait PCAs
+```{r}
+
+PC_Current <- autoplot(traits_pca_C, colour="grey", alpha=.8,
+         loadings = TRUE, loadings.colour = 'darkblue',
+         loadings.label = TRUE, loadings.label.repel=TRUE, loadings.label.size = 3.5, loadings.label.colour='black', main="Current Year PCA (2022-23)")+
+        theme_classic() +
+        theme(plot.title = element_text(size = 11))  
+
+PC_Prior <- autoplot(traits_pca_P, colour="grey", alpha=.8,
+         loadings = TRUE, loadings.colour = 'darkblue',
+         loadings.label = TRUE, loadings.label.repel=T, loadings.label.size = 3.5, loadings.label.colour='black', main="Prior Year PCA (2021-22)") +
+        theme_classic() +
+        theme(plot.title = element_text(size = 11))  
+
+
+MBC_PC1_P<-ggplot(aes(y=MBC, x=PC1_P, color=Precip, na.rm=TRUE), data=subset(CarbonShallow_Comparable, MBC_Lab=='UW'))+
+geom_smooth(method="lm") +
+  geom_point(aes(shape=Precip), alpha=.8) +
+  labs(x="PC1 (Prior Year)", y = expression("MBC ("*mu*"g C g"^-1*" soil)"))+
+  theme_classic() +
+  theme(plot.title = element_text(size=12), legend.position =  "none", axis.title.y = element_text(hjust=0)) +
+    scale_color_manual(values=c("darkcyan","cadetblue2"))
+
+MAOM_PC2_C_blockage <- ggplot(aes(y=MAOM_TC, x=PC2_C, color=BlockAge, na.rm=TRUE), data=CarbonShallow_Comparable)+
+geom_smooth(method="lm")+
+  geom_point(aes(shape=BlockAge), alpha=.8) +
+  labs(col="Land Use", shape= "Land Use", x="PC2 (Current Year)",  y=expression(MAOC ~ (mg ~ C ~ g^-1 ~ soil)))+ 
+  theme_classic() +
+  theme(plot.title = element_text(size=12), legend.position =  "none", axis.title.y = element_text(hjust=0))  +
+   scale_color_manual(values=c("darkolivegreen2","darkolivegreen4"))
+
+WEOC_PC2_C_blockage <- ggplot(aes(y=WEOC, x=PC2_C, color=BlockAge, na.rm=TRUE), data=CarbonShallow_Comparable)+
+geom_smooth(method="lm")+
+  geom_point(aes(shape=BlockAge), alpha=.8) +
+  labs(col="Land Use", shape= "Land Use", x="PC2 (Current Year)",  y = expression("WEOC ("*mu*"g C g"^-1*" soil)"))+ 
+  theme_classic() +
+  theme(plot.title = element_text(size=12), legend.position = "none", axis.title.y = element_text(hjust=0))+
+   scale_color_manual(values=c("darkolivegreen2","darkolivegreen4"))
+
+#Figure 3
+PCA_PLOTS<- plot_grid(MBC_PC1_P, MAOM_PC2_C_blockage, WEOC_PC2_C_blockage,
+          ncol = 4 , nrow = 1, rel_widths = c(1,1,1,.1), labels =c("(a)", "(b)", "(c)"), labelsize=10, align="hv", label_x=-.02)
+
+PCs <- plot_grid(PC_Prior, PC_Current, "", ncol=3, nrow=1, labels =c("(d)", "(e)"), labelsize=10, align="hv", label_x=-.02)
+
+combined_traits <- plot_grid(PCA_PLOTS, PCs, ncol=1, nrow=2)
+
+
+Fig3 <- combined_traits + draw_grob(LandUse_legend, 2/3, 0, .3, .4) + draw_grob(Precip_legend, .5, 0, .345, .45 )
+print(Fig3)
+ggsave("Figure3.png", plot=Fig3, height=12, width=18, units=c("cm"), dpi=600)
+
+```
+
+#Fig 4: Functional Diversity graphs
+```{r}
+
+#FEve and Land Use
+
+TC_FEve_C_blockage <- ggplot(aes(y=TC_Log, x=FEve_C, color=BlockAge, na.rm=TRUE), data=CarbonShallow_Comparable)+
+geom_smooth(method="lm") +
+  geom_point(aes(shape=BlockAge), alpha=.8) +
+  labs(col="Land Use", shape= "Land Use", x="FEve (Current Year)",  y=expression(log(TC) ~ (mg ~ C ~ g^-1 ~ soil)))+
+  theme_classic() +
+  theme(plot.title = element_text(size=12), legend.position = "none", axis.title.y = element_text(hjust=0)) +
+   scale_color_manual(values=c("darkolivegreen2","darkolivegreen4"))
+
+POM_FEve_C_blockage <- ggplot(aes(y=POM_TC, x=FEve_C, color=BlockAge, na.rm=TRUE), data=CarbonAll_CWM_scaledtraits)+
+geom_smooth(method="lm") +
+  geom_point(aes(shape=BlockAge), alpha=.8) +
+  labs(col="Land Use", shape= "Land Use", x="FEve (Current Year)", y=expression(POC ~ (mg ~ C ~ g^-1 ~ soil)))+ 
+  theme_classic() +
+  theme(plot.title = element_text(size=12), legend.position = "none",axis.title.y = element_text(hjust=0)) +
+   scale_color_manual(values=c("darkolivegreen2","darkolivegreen4"))
+
+
+#FRic Interactions with Precip
+
+POM_FRic <- ggplot(aes(y=POM_TC, x=FRic_C, color=Precip, na.rm=TRUE), data=CarbonShallow_Comparable)+
+geom_smooth(method="lm") +
+  geom_point(aes(shape=Precip), alpha=.8) +
+  labs(x="FRic (Current Year)",  y=expression(POC ~ (mg ~ C ~ g^-1 ~ soil)))+ 
+  theme_classic() +
+  theme(plot.title = element_text(size=12), legend.position = "none",axis.title.y = element_text(hjust=0)) +
+    scale_color_manual(values=c( "darkcyan","cadetblue2"))
+
+MAOM_FRic<-ggplot(aes(y=MAOM_TC, x=FRic_C, color=Precip, na.rm=TRUE), data=CarbonShallow_Comparable)+
+geom_smooth(method="lm") +
+  geom_point(aes(shape=Precip), alpha=.8) +
+  labs(x="FRic (Current Year)",  y=expression(MAOC ~ (mg ~ C ~ g^-1 ~ soil))) + 
+  theme_classic() +
+  theme(plot.title = element_text(size=12), legend.position = "none",axis.title.y = element_text(hjust=0)) +
+    scale_color_manual(values=c("darkcyan","cadetblue2"))
+
+#Figure 4
+FD_PLOTS <- plot_grid(POM_FRic, MAOM_FRic, "", TC_FEve_C_blockage, POM_FEve_C_blockage, 
+          ncol = 3, nrow = 2, align="hv",   rel_widths = c(2,2, 1), labels = c("(a)", "(b)","","(c)","(d)"), label_x=-0.02)
+Fig4<- FD_PLOTS + draw_grob(LandUse_legend, .66, 0, .45, .6) + draw_grob(Precip_legend, .48, 0, .45, .95 )
+print(Fig4)
+ggsave("Figure4.png", plot=Fig4, height=12, width=18, units=c("cm"), dpi=600)
+
+```
+
+
+
+##Supplemental Figures
+#Appendix S1
+```{r}
+#calculations of different sample sizes for the main dataset used for all analyses. NA values were either never analyzed for that year, or were outlier values.
+CarbonShallow_Comparable %>% count(is.na(TC_Log), Year)
+CarbonShallow_Comparable %>% subset(MBC_Lab=='UW') %>% count(is.na(MBC), Year)
+CarbonShallow_Comparable %>% count(is.na(WEOC), Year)
+CarbonShallow_Comparable %>% count(is.na(POM_TC), Year)
+CarbonShallow_Comparable %>% count(is.na(MAOM_TC), Year)
+```
+
+#Appendix S2
+```{r}
+#Appendix S2: Figure S4: Total carbon by precipitation shelter
+CarbonBlock <- lm(TC_mg_gsoil ~ Block, data=CarbonAllShallow)
+anova(CarbonBlock) #block is very significant
+
+Block_means <- emmeans(CarbonBlock, spec = "Block")
+multcomp::cld(Block_means, level=1-.05/15)
+plot(Block_means, xlab=expression(Mean ~ Total ~ Carbon ~ (mg ~ C ~ g^-1 ~soil)), ylab="Precipitation Shelter")
+
+#Appendix S2: Figure S5
+SOC_SOC <- cor(CarbonShallow_Comparable[,c(10, 14:15,17,19)],CarbonShallow_Comparable[,c(10,14:15,17,19)], use = "complete.obs")
+colnames(SOC_SOC) <- c('TC','MBC','WEOC','POC','MAOC')
+rownames(SOC_SOC) <- c('TC','MBC','WEOC','POC','MAOC')
+corrplot.mixed(SOC_SOC)
+
+```
+#Appendix S3 Fig S1: Percent Cover
+```{r}
+#total percent cover and percent cover of each major functional group, grouped by precipitation, land use history, and year of measurement. 
+cover_precip <- ggplot(CarbonAllShallow, aes(x=Precip, y=COVER_C*100))+
+  geom_boxplot(aes(fill=Precip))+
+ geom_jitter(alpha=.1) +
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+  labs(y="Total Cover (%)")+
+    scale_fill_manual(values=alpha(c("darkcyan","cadetblue2"),.7)) +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) + 
+  geom_signif(comparisons = list(c("50%", "125%")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off")   
+    
+ann_g_precip <- ggplot(CarbonAllShallow, aes(x=Precip, y=ANN_G_C*100))+
+  geom_boxplot(aes(fill=Precip))+
+  geom_jitter(alpha=.1) +
+ theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+  labs(y="Ann. Grass (%)")+
+    scale_fill_manual(values=alpha(c("darkcyan","cadetblue2"),.7)) +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) + 
+  geom_signif(comparisons = list(c("50%", "125%")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off")   
+    
+ann_f_precip <- ggplot(CarbonAllShallow, aes(x=Precip, y=ANN_F_C*100))+
+  geom_boxplot(aes(fill=Precip))+
+  geom_jitter(alpha=.1) +
+ theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+    labs(y="Ann. Forbs (%)")+
+    scale_fill_manual(values=alpha(c("darkcyan","cadetblue2"),.7)) +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) + 
+  geom_signif(comparisons = list(c("50%", "125%")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off")   
+    
+per_f_precip <- ggplot(CarbonAllShallow, aes(x=Precip, y=PER_F_C*100))+
+  geom_boxplot(aes(fill=Precip))+
+  geom_jitter(alpha=.1) +
+ theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+  labs(y="Per. Forbs (%)")+
+    scale_fill_manual(values=alpha(c("darkcyan","cadetblue2"),.7)) +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) + 
+  geom_signif(comparisons = list(c("50%", "125%")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off")   
+   
+per_g_precip <- ggplot(CarbonAllShallow, aes(x=Precip, y=PER_G_C*100))+
+  geom_boxplot(aes(fill=Precip))+
+  geom_jitter(alpha=.1) +
+ theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+  labs(y="Per. Grass (%)")+
+    scale_fill_manual(values=alpha(c("darkcyan","cadetblue2"),.7)) +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) + 
+  geom_signif(comparisons = list(c("50%", "125%")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off")   
+   
+### Land Use 
+cover_blockage <- ggplot(CarbonAllShallow, aes(x=BlockAge, y=COVER_C*100))+
+  geom_boxplot(aes(fill=BlockAge))+
+  geom_jitter(alpha=.1) +
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+  labs(y="Total Cover (%)")+
+    scale_fill_manual(values=alpha(c("darkolivegreen2","darkolivegreen4"),.7))+
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+   geom_signif(comparisons = list(c("2 yrs shrubs", "6 yrs shrubs")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off") +
+  scale_x_discrete(labels=c('2 yrs', '6 yrs'))
+
+    
+ann_g_blockage <- ggplot(CarbonAllShallow, aes(x=BlockAge, y=ANN_G_C*100))+
+  geom_boxplot(aes(fill=BlockAge))+
+  geom_jitter(alpha=.1) +
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+  labs(y="Ann. Grass (%)")+
+   scale_fill_manual(values=alpha(c("darkolivegreen2","darkolivegreen4"),.7))+
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+   geom_signif(comparisons = list(c("2 yrs shrubs", "6 yrs shrubs")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off") +
+  scale_x_discrete(labels=c('2 yrs', '6 yrs'))
+
+    
+ann_f_blockage <- ggplot(CarbonAllShallow, aes(x=BlockAge, y=ANN_F_C*100))+
+  geom_boxplot(aes(fill=BlockAge))+
+  geom_jitter(alpha=.1) +
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+  labs(y="Ann. Forbs (%)")+
+    scale_fill_manual(values=alpha(c("darkolivegreen2","darkolivegreen4"),.7))+
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+   geom_signif(comparisons = list(c("2 yrs shrubs", "6 yrs shrubs")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off") +
+  scale_x_discrete(labels=c('2 yrs', '6 yrs'))
+
+    
+per_f_blockage <- ggplot(CarbonAllShallow, aes(x=BlockAge, y=PER_F_C*100))+
+  geom_boxplot(aes(fill=BlockAge))+
+ geom_jitter(alpha=.1) +
+   theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+  labs(y="Per. Forbs (%)")+
+     scale_fill_manual(values=alpha(c("darkolivegreen2","darkolivegreen4"),.7))+
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+   geom_signif(comparisons = list(c("2 yrs shrubs", "6 yrs shrubs")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off") +
+  scale_x_discrete(labels=c('2 yrs', '6 yrs'))
+
+    
+
+per_g_blockage <- ggplot(CarbonAllShallow, aes(x=BlockAge, y=PER_G_C*100))+
+  geom_boxplot(aes(fill=BlockAge))+
+  geom_jitter(alpha=.1) +
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+  labs(y="Per. Grass (%)")+
+    scale_fill_manual(values=alpha(c("darkolivegreen2","darkolivegreen4"),.7))+
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+   geom_signif(comparisons = list(c("2 yrs shrubs", "6 yrs shrubs")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off") +
+  scale_x_discrete(labels=c('2 yrs', '6 yrs'))
+
+    
+##year
+
+cover_Year <- ggplot(CarbonAllShallow, aes(x=Year, y=COVER_C*100))+
+  geom_boxplot(aes(fill=Year))+
+  geom_jitter(alpha=.1) +
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+  labs(y="Total Cover (%)")+
+    scale_fill_manual(values=alpha(c("azure","azure4"),.7))+
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+   geom_signif(comparisons = list(c("2022", "2023")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off") 
+
+    
+ann_g_Year <- ggplot(CarbonAllShallow, aes(x=Year, y=ANN_G_C*100))+
+  geom_boxplot(aes(fill=Year))+
+  geom_jitter(alpha=.1) +
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+  labs(y="Ann. Grass (%)")+
+   scale_fill_manual(values=alpha(c("azure","azure4"),.7))+
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+   geom_signif(comparisons = list(c("2022", "2023")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off") 
+
+    
+ann_f_Year <- ggplot(CarbonAllShallow, aes(x=Year, y=ANN_F_C*100))+
+  geom_boxplot(aes(fill=Year))+
+  geom_jitter(alpha=.1) +
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+  labs(y="Ann. Forbs (%)")+
+    scale_fill_manual(values=alpha(c("azure","azure4"),.7))+
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+   geom_signif(comparisons = list(c("2022", "2023")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off") 
+
+    
+per_f_Year <- ggplot(CarbonAllShallow, aes(x=Year, y=PER_F_C*100))+
+  geom_boxplot(aes(fill=Year))+
+ geom_jitter(alpha=.1) +
+   theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+  labs(y="Per. Forbs (%)")+
+     scale_fill_manual(values=alpha(c("azure","azure4"),.7))+
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+   geom_signif(comparisons = list(c("2022", "2023")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off") 
+
+    
+
+per_g_Year <- ggplot(CarbonAllShallow, aes(x=Year, y=PER_G_C*100))+
+  geom_boxplot(aes(fill=Year))+
+  geom_jitter(alpha=.1) +
+  theme_classic() +
+  theme(plot.title = element_text(size=10), legend.position = "none",axis.title.x = element_blank())+
+  labs(y="Per. Grass (%)")+
+    scale_fill_manual(values=alpha(c("azure","azure4"),.7))+
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+   geom_signif(comparisons = list(c("2022", "2023")), map_signif_level=TRUE) +
+   coord_cartesian(clip = "off") 
+
+#Appendix S3: Figure S1
+plot_grid(cover_precip, ann_f_precip, per_f_precip, ann_g_precip, per_g_precip, cover_blockage, ann_f_blockage, per_f_blockage, ann_g_blockage, per_g_blockage, cover_Year, ann_f_Year, per_f_Year, ann_g_Year, per_g_Year,
+          ncol = 5, nrow = 3)
+
+```
+
+#Appendix S4
+```{r}
+
+traits <- read.csv("data/traits_matched.csv")
+traits <- traits[,c(2:12)] #removing first column 
+rownames(traits) <- traits[,1]
+traits[,1] <- NULL
+
+trait_key <- prcomp(traits, center=TRUE, scale. = TRUE)
+results_traits <- (summary(trait_key))
+results_traits$importance[3,]
+summary(trait_key)
+loadings_key<-trait_key$rotation
+
+#Figure S1: Trait average PCA biplot with species
+fviz_pca_biplot(trait_key, repel = TRUE,
+                col.var = "darkblue", # Variables color
+                col.ind = "#696969", ) + # Individuals color
+                theme_minimal()
+#Table S3
+loadings_key[,1:4]
+
+
+loadings_PCA_P<-traits_pca_P$rotation
+#Appendix S4: Table S4
+loadings_PCA_P[,1:4]
+#Appendix S4: Table S5
+loadings_PCA_C<-traits_pca_C$rotation
+loadings_PCA_C[,1:4]
+
+#Figure S2: Pearson's correlations of functional trait averages
+T<- cor(traits) #all traits
+corrplot.mixed(T)
+
+
+
+
+```
+
+
+
