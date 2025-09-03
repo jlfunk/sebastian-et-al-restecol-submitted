@@ -7,13 +7,13 @@ This repository contains code and data accompanying the paper:
 
 ```plaintext
 .
-├── Sebastian_Carbon_Dec23.Rmd
+├── Sebastian_Carbon_RestEco.Rmd
 └── data/
 ```
 
 ### Description of the contents
 
-    Sebastian_Carbon_Dec23.Rmd: Code to reproduce all analyses from paper.
+    Sebastian_Carbon_RestEco.Rmd: Code to reproduce all analyses from paper.
     data/: This directory contains datasets for the paper
 
 
